@@ -119,6 +119,11 @@ def model_two_qubits_interact(omega):
     return H    
 
 @jit(nopython=True)
+def model_two_qubits_interact_two_params(omega):
+    H = (omega[0]*np.kron(Z, I )  + omega[1]*np.kron(Z, Z))
+    return H      
+
+@jit(nopython=True)
 def model_two_qubits_interact_oneparam(omega):
     H = (omega*np.kron(Z, X ) )
     return H   
@@ -554,7 +559,7 @@ def Mse(par, true_par):
 
 
 
-def update_SMC(t, particles, weights, h_true, h_guess, state, projectors, k_mean=15):
+def update_SMC(t, particles, weights, h_true, h_guess, state, projectors, k_mean=1):
     """Updates the particles' probability distribution. Given a measurement time t, performs a simulation of the 
     actual system and gets a result. We compute the probability of getting the result by simulating the evolution using
     all the particles. Each particle weight is multiplied using the probability of getting the same result as the true system.
@@ -599,7 +604,9 @@ def update_SMC(t, particles, weights, h_true, h_guess, state, projectors, k_mean
     # likelihoods[i_sample, :] = probs_sample
     # probs = np.array(probs)
     # new_weights = weights * probs
-    n_weights = normalize_distribution(weights * mean_probs) #update weights and normalize.
+    n_weights = normalize_distribution(np.exp( np.log(weights)  + 0.2* np.log(mean_probs) )) #update weights and normalize.
+    # n_weights = normalize_distribution(weights*mean_probs) #update weights and normalize.
+
 
     return particles, n_weights
 
