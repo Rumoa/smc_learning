@@ -259,7 +259,10 @@ def evolve_all_particles(t, state, hguess, particles, projectors):
         probs_t = get_all_probs(psi_t, projectors)
         probs.append(probs_t)
 
-    return probs    
+    return probs 
+
+
+       
 
 # def evolve_state(H, v, t):
 #     evolved_state = expm(-t*H*1j)@v
@@ -553,8 +556,54 @@ def Mse(par, true_par):
 #     return particles, n_weights
 
 
+@jit(nopython=True)
+def prob_getting_0(parameters, t):
+    p = np.power(np.cos(parameters[0]*t/2), 2) * np.exp(-1/parameters[1]*t) + 0.5*(1 - np.exp(-1/parameters[1]*t))
+    return p
+# @jit(nopython=True)
+def get_sample(true_parameters, t):
+    p_0 = prob_getting_0(true_parameters, t)
 
-def update_SMC(t, particles, weights, h_true, h_guess, state, projectors, k_mean=15):
+    if p_0>1 or p_0<0:
+        input("warning")
+    rng = np.random.default_rng()
+    # sample = rng.choice([0, 1], size=1, p=[np.abs(p_0), np.abs(1 - p_0)])
+    sample = rng.choice([0, 1], size=1, p=[p_0, 1-p_0])
+
+    return sample[0]
+
+
+
+
+@jit(nopython=True)
+def probs_all_particles_analytical(particles, t):
+    """Evolution of the initial state under the evolution of possible guesses
+    Hamiltonians. It outputs the probabilities given an array of projectors.
+
+    Args:
+        t (float): Time to evolve particles
+        state (np.array(complex128)): Initial state
+        hguess (function): Function that outputs the hamiltonian. "free-parameter Hamiltonian"
+        particles (np.array(float)): np.array with guesses particles. The shape must be the following:
+            if the dimension is 2, a particle p^i will be (p_1, p_2). The whole array must be:
+                np.array([[p^1_1, p^2_1, ..., p^n_1], [p^1_2, p^2_2, ..., p^n_2] ])
+        projectors (np.array(np.array)): The projectors corresponding to the possible outcomes.
+
+    Returns:
+        List of np.arrays: List with the array of probabilities.
+    """
+    probs = []
+    for part_i in particles.T:
+        # print(part_i)
+        p0 = prob_getting_0(part_i, t)
+        probs.append([p0, 1-p0])
+
+        # probs.append([np.abs(p0), np.abs(1-p0)])
+
+    return probs   
+
+
+def update_SMC(t, particles, weights, true_parameters, k_mean=15):
     """Updates the particles' probability distribution. Given a measurement time t, performs a simulation of the 
     actual system and gets a result. We compute the probability of getting the result by simulating the evolution using
     all the particles. Each particle weight is multiplied using the probability of getting the same result as the true system.
@@ -578,17 +627,15 @@ def update_SMC(t, particles, weights, h_true, h_guess, state, projectors, k_mean
         particles (np.array(np.array)): Particles. They are the same as the input ones.
         n_weights (np.array): Weights after being updated
     """
-    rng = np.random.default_rng()
-    state_sample = evolve_state(h_true, state, t) #get a sample evolved state from the true system
-    probs = get_all_probs(state_sample, projectors ) #compute all the probabilities for all the possible outcomes.
 
+    all_probs = probs_all_particles_analytical(particles, t)
     
-    all_probs = evolve_all_particles(t, state, h_guess, particles, projectors) #evolve all the particles to the measurement time and compute the probabilities
 
     mean_probs = np.zeros(len(weights)) 
     for _ in range(k_mean):
         
-        result_sample = rng.choice(range(len(projectors)), p = normalize_distribution(probs) ) #select a result from the true system.
+        result_sample = get_sample(true_parameters, t) #get a sample from the true state
+
         
         probs_temp = np.array(np.array(all_probs).T[result_sample]) #select the probability from the particles that corresponds to the result
         mean_probs = mean_probs + probs_temp 
@@ -600,10 +647,11 @@ def update_SMC(t, particles, weights, h_true, h_guess, state, projectors, k_mean
     # probs = np.array(probs)
     # new_weights = weights * probs
     n_weights = normalize_distribution(weights * mean_probs) #update weights and normalize.
-
+    if np.min(n_weights)<0:
+        print("Warning")
     return particles, n_weights
 
-def adaptive_bayesian_learn(particles, weights, h_true, h_guess, true_parameters, state, steps,projectors, no_particles, filter_par, resampling_threshold, tol=1E-5 ):
+def adaptive_bayesian_learn(particles, weights, true_parameters,  steps, no_particles, filter_par, resampling_threshold, tol=1E-5 ):
     """Adaptive bayesian learning. Given a true Hamiltonian and a Hamiltonian with free parameter, we learn the true parameters of the system. The measurement time is
     obtained using PGH in each iteration, updating the distribution of the particle by comparing the result from the true system and each of the possible particles.
     If the weights of the particles satisfy  sum_i 1/(w_i)^2 < threshold * N_particles, the particles are resampled.
@@ -639,7 +687,7 @@ def adaptive_bayesian_learn(particles, weights, h_true, h_guess, true_parameters
     part_list = []
     weight_list = []
     estimated_parameter_list = []
-    time_tol = 1E6
+    time_tol = 1E5
     for i_step in range(steps):
         # print("\n--------------------")
         print("Experiment no. ", i_step)
@@ -662,7 +710,7 @@ def adaptive_bayesian_learn(particles, weights, h_true, h_guess, true_parameters
 
 
         particles, weights = update_SMC(
-            t, particles, weights, h_true, h_guess, state, projectors)
+            t, particles, weights, true_parameters=true_parameters)
         # print(weights)
         step_list.append(i_step)    
         part_list.append(particles)  
@@ -703,7 +751,7 @@ def adaptive_bayesian_learn(particles, weights, h_true, h_guess, true_parameters
 
 
 def generate_results(
-    true_parameters, steps, h_true, h_guess, tol, projectors, quantum_dim, parameter_dim,
+    true_parameters, steps,  tol,  parameter_dim,
     bounds, no_particles, filter_par , resampling_threshold):
     """Prepare auxiliary arrays needed to perform adaptive bayesian learning.
 
@@ -746,15 +794,14 @@ def generate_results(
     if parameter_dim==1:
         particles = particles[0, :]
     
-    state = initial_state(dim=quantum_dim)[:]
 
 
 
 
     estimated_parameter, evolution_dic = adaptive_bayesian_learn(
-    particles=particles, weights=weights, true_parameters=true_parameters, state=state,
-    steps=steps, h_true=h_true, h_guess=h_guess,
-    tol=tol, projectors=projectors, no_particles=no_particles, filter_par=filter_par, resampling_threshold=resampling_threshold)
+    particles=particles, weights=weights, true_parameters=true_parameters, 
+    steps=steps,
+    tol=tol, no_particles=no_particles, filter_par=filter_par, resampling_threshold=resampling_threshold)
 
     return estimated_parameter, evolution_dic
 
